@@ -3,14 +3,16 @@
 #include <math.h>
 #include <mpi.h>
 
+#define DEBUG 1
+
 // Length of the 2D domain
-#define L 256//3360 // Multiple of 4, 6, 8, 10, 12, 14, 16 (up to 256 MPI processes)
+#define L 4//3360 // Multiple of 4, 6, 8, 10, 12, 14, 16 (up to 256 MPI processes)
 
 // Width of the grid spacing
 #define H 1
 
 // Thermal diffusivity of the medium
-#define K 4
+#define K 2
 
 // Fixed boundary temperature
 #define TEMP_BOUND 100
@@ -19,7 +21,7 @@
 #define TEMP_CENTER 0
 
 // End time of of the simulation (starting at 0 and with TIME_DELTA increments)
-#define TIME_END 0.5
+#define TIME_END 0.2
 
 // Delta of time between iterations
 #define TIME_DELTA 0.1
@@ -31,6 +33,8 @@ void update_steps(double *prev_mat, double *mat, int dim);
 void halo_exchange(double *mat, int dim, int west_neigh, int east_neigh, 
                    int north_neigh, int south_neigh, MPI_Comm cart_comm, 
                    MPI_Datatype mpi_column_t);
+void print_matrix(double *local_mat, int local_dim, int mat_dim, 
+                  int grid_side_len, int rank, MPI_Comm cart_comm);
 
 
 int main(int argc, char *argv[]) {
@@ -94,16 +98,13 @@ int main(int argc, char *argv[]) {
     elapsed_time = stop_time - start_time;
 
     // Print results
-    if (rank == 0) {
-        for (int i = 0; i < local_dim + 2; i++) {
-            for (int j = 0; j < local_dim + 2; j++) {
-                printf("%f ", mat[i * (local_dim + 2) + j]);
-            }
-            printf("\n");
+    #if DEBUG
+        print_matrix(mat, local_dim, L, grid_side_len, rank, cart_comm);
+    #else
+        if (rank == 0) {
+            printf("Total time: %f\n", elapsed_time);
         }
-
-        printf("Total time: %f\n", elapsed_time);
-    }
+    #endif
 
     // Free resources and finalize
     free(mat);
@@ -179,4 +180,44 @@ void halo_exchange(double *mat, int dim, int west_neigh, int east_neigh,
     MPI_Sendrecv(&mat[dim * (dim + 2) + 1], dim, MPI_DOUBLE, south_neigh, 3, 
                  &mat[1], dim, MPI_DOUBLE, north_neigh, 3, 
                  cart_comm, MPI_STATUS_IGNORE);
+}
+
+void print_matrix(double *local_mat, int local_dim, int mat_dim, int grid_side_len, int rank, MPI_Comm cart_comm) {
+    int source;
+    int coords[2];
+
+    // Process 0 receives all the matrix blocks and writes them
+    if (rank == 0) {
+        double* temp_row = (double*) malloc(local_dim * sizeof(double));
+
+        for (int mat_row = 0; mat_row < mat_dim; mat_row++) {
+            // Local row corresponding to current column pointer
+            coords[0] = mat_row / local_dim;
+
+            for (int grid_col = 0; grid_col < mat_dim; grid_col += local_dim) {
+                coords[1] = grid_col / local_dim;
+                source = coords[1] * grid_side_len + grid_side_len - coords[0] - 1;
+                if (source == 0) {
+                    for(int mat_col = 0; mat_col < local_dim; mat_col++) {
+                        printf("%04.2f ", local_mat[(mat_row % local_dim + 1) * (local_dim + 2) + (mat_col + 1)]);
+                    }
+                }
+                else {
+                    MPI_Recv(temp_row, local_dim, MPI_DOUBLE, source, 0, cart_comm,
+                             MPI_STATUS_IGNORE);
+                    for(int mat_col = 0; mat_col < local_dim; mat_col++) {
+                        printf("%04.2lf ", temp_row[mat_col]);
+                    }
+                }
+            }
+            printf("\n");
+        }
+
+        free(temp_row);
+    } 
+    else { // Send matrix block row by row to process 0
+        for (int mat_row = 1; mat_row < local_dim + 1; mat_row++) {
+            MPI_Send(&local_mat[mat_row * (local_dim + 2) + 1], local_dim, MPI_DOUBLE, 0, 0, cart_comm);
+        }
+    }
 }
