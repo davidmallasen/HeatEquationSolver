@@ -3,7 +3,8 @@
 #include <math.h>
 #include <mpi.h>
 
-#define DEBUG 1
+#define DEBUG 0
+#define IDLE_MONITOR 1
 
 // Length of the 2D domain
 #define L 4//3360 // Multiple of 4, 6, 8, 10, 12, 14, 16 (up to 256 MPI processes)
@@ -33,6 +34,9 @@ void update_steps(double *prev_mat, double *mat, int dim);
 void halo_exchange(double *mat, int dim, int west_neigh, int east_neigh, 
                    int north_neigh, int south_neigh, MPI_Comm cart_comm, 
                    MPI_Datatype mpi_column_t);
+void halo_exchange_idle(double *mat, int dim, int west_neigh, int east_neigh, 
+                        int north_neigh, int south_neigh, MPI_Comm cart_comm, 
+                        MPI_Datatype mpi_column_t, int rank, double t, double start_time);
 void print_matrix(double *local_mat, int local_dim, int mat_dim, 
                   int grid_side_len, int rank, MPI_Comm cart_comm);
 
@@ -89,8 +93,13 @@ int main(int argc, char *argv[]) {
     start_time = MPI_Wtime();
 
     for (float t = 0; t < TIME_END; t += TIME_DELTA) {
-        halo_exchange(mat, local_dim, west_neigh, east_neigh, north_neigh, 
-                      south_neigh, cart_comm, mpi_column_t);
+        #if IDLE_MONITOR
+            halo_exchange_idle(mat, local_dim, west_neigh, east_neigh, north_neigh, 
+                               south_neigh, cart_comm, mpi_column_t, rank, t, start_time);
+        #else
+            halo_exchange(mat, local_dim, west_neigh, east_neigh, north_neigh, 
+                          south_neigh, cart_comm, mpi_column_t);
+        #endif
         update_steps(mat, next_mat, local_dim);
     }
 
@@ -98,6 +107,7 @@ int main(int argc, char *argv[]) {
     elapsed_time = stop_time - start_time;
 
     // Print results
+    fflush(stdout);
     #if DEBUG
         print_matrix(mat, local_dim, L, grid_side_len, rank, cart_comm);
     #else
@@ -180,6 +190,45 @@ void halo_exchange(double *mat, int dim, int west_neigh, int east_neigh,
     MPI_Sendrecv(&mat[dim * (dim + 2) + 1], dim, MPI_DOUBLE, south_neigh, 3, 
                  &mat[1], dim, MPI_DOUBLE, north_neigh, 3, 
                  cart_comm, MPI_STATUS_IGNORE);
+}
+
+void halo_exchange_idle(double *mat, int dim, int west_neigh, int east_neigh, 
+                        int north_neigh, int south_neigh, MPI_Comm cart_comm, 
+                        MPI_Datatype mpi_column_t, int rank, double t, double start_time) {
+    MPI_Request request;
+    double wait_start, wait_end;
+
+    // Send west border (second column) and receive east border (last column)
+    MPI_Isend(&mat[(dim + 2) + 1], 1, mpi_column_t, west_neigh, 0, cart_comm, &request);
+    MPI_Irecv(&mat[(dim + 2) + dim + 1], 1, mpi_column_t, east_neigh, 0, cart_comm, &request);
+    wait_start = MPI_Wtime();
+    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    wait_end = MPI_Wtime();
+    printf("%d %lf 1 %lf %lf\n", rank, t, wait_start - start_time, wait_end - start_time);
+
+    // Send east border (second to last column) and receive west border (first column)
+    MPI_Isend(&mat[(dim + 2) + dim], 1, mpi_column_t, east_neigh, 1, cart_comm, &request);
+    MPI_Irecv(&mat[(dim + 2)], 1, mpi_column_t, west_neigh, 1, cart_comm, &request);
+    wait_start = MPI_Wtime();
+    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    wait_end = MPI_Wtime();
+    printf("%d %lf 2 %lf %lf\n", rank, t, wait_start - start_time, wait_end - start_time);
+
+    // Send north border (second row) and receive south border (last row)
+    MPI_Isend(&mat[(dim + 2) + 1], dim, MPI_DOUBLE, north_neigh, 2, cart_comm, &request);
+    MPI_Irecv(&mat[(dim + 1) * (dim + 2) + 1], dim, MPI_DOUBLE, south_neigh, 2, cart_comm, &request);
+    wait_start = MPI_Wtime();
+    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    wait_end = MPI_Wtime();
+    printf("%d %lf 3 %lf %lf\n", rank, t, wait_start - start_time, wait_end - start_time);
+
+    // Send south border (second to last row) and receive north border (first row)
+    MPI_Isend(&mat[dim * (dim + 2) + 1], dim, MPI_DOUBLE, south_neigh, 3, cart_comm, &request);
+    MPI_Irecv(&mat[1], dim, MPI_DOUBLE, north_neigh, 3, cart_comm, &request);
+    wait_start = MPI_Wtime();
+    MPI_Wait(&request, MPI_STATUS_IGNORE);
+    wait_end = MPI_Wtime();
+    printf("%d %lf 4 %lf %lf\n", rank, t, wait_start - start_time, wait_end - start_time);
 }
 
 void print_matrix(double *local_mat, int local_dim, int mat_dim, int grid_side_len, int rank, MPI_Comm cart_comm) {
