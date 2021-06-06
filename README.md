@@ -25,7 +25,7 @@ And visualize using the python script:
 python3 visualize_heat_equation.py
 ~~~
 
-![](docs/Heat_equation_visualization.png)
+![](doc/Heat_equation_visualization.png)
 
 ## Idle period monitoring
 To monitor the idle periods, set the parameter IDLE_MONITOR to 1. This will split the `MPI_Sendrecv` calls to `MPI_Isend`, `MPI_Irecv` and `MPI_Wait`. Then, the time spent waiting for data will be printed out. You can visualize these idle periods executing:
@@ -33,4 +33,4 @@ To monitor the idle periods, set the parameter IDLE_MONITOR to 1. This will spli
 python3 visualize_heat_equation_idle.py
 ~~~
 
-![](docs/Idle_period_propagation.png)
+![](doc/Idle_period_propagation.png)
